@@ -229,7 +229,7 @@ async fn read_counter_from_db(conn: Connection) -> anyhow::Result<Option<u128>> 
 }
 
 fn main() -> anyhow::Result<()> {
-    let (db_tx, db_rx) = mpsc::channel::<u128>();
+    let (db_signal, db_receive) = mpsc::channel::<u128>();
     thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -239,7 +239,7 @@ fn main() -> anyhow::Result<()> {
             let conn = connect_to_database()
                 .await
                 .expect("failed to connect to database");
-            while let Ok(count) = db_rx.recv() {
+            while let Ok(count) = db_receive.recv() {
                 if let Err(err) = write_counter_into_db(conn.clone(), count).await {
                     eprintln!("DB write error: {:?}", err);
                 }
@@ -260,7 +260,6 @@ fn main() -> anyhow::Result<()> {
         .block_on(read_counter_from_db(conn.clone()))?
         .unwrap_or(0);
 
-    let db_tx_for_gtk = db_tx.clone();
     app.connect_activate(move |app| {
         load_custom_css();
         let bongo = BongoCat::new(app, initial);
@@ -285,13 +284,13 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        let db_tx_for_async = db_tx_for_gtk.clone();
+        let db_signal_for_async = db_signal.clone();
         MainContext::default().spawn_local(async move {
             while key_receiver.recv().await.is_ok() {
                 bongo.animate();
                 bongo.increment_counter();
                 let current = *bongo.counter.lock().unwrap();
-                if let Err(_) = db_tx_for_async.send(current) {
+                if let Err(_) = db_signal_for_async.send(current) {
                     eprintln!("DB thread has shut down");
                 }
             }
