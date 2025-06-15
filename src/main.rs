@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{mpsc, Arc, Mutex},
     thread,
-    time::Duration,
+    time::Duration, u128,
 };
 
 use async_channel::{unbounded, Sender};
@@ -29,7 +29,7 @@ struct BongoCat {
 }
 
 impl BongoCat {
-    fn new(app: &Application) -> Self {
+    fn new(app: &Application, initial: u128) -> Self {
         let asset_dir = asset_dir();
         let hit_left_path = asset_dir.join("idle.png");
         let hit_right_path = asset_dir.join("hit.png");
@@ -54,7 +54,7 @@ impl BongoCat {
         win.set_decorated(false);
 
         let counter_label = Label::default();
-        counter_label.set_text("0");
+        counter_label.set_text(&initial.to_string());
 
         let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         container.append(&counter_label);
@@ -68,7 +68,7 @@ impl BongoCat {
             hit_right_path,
             anim_ms: ANIM_DURATION_MS,
             next_left: Cell::new(true),
-            counter: Mutex::new(0),
+            counter: Mutex::new(initial),
             counter_label: counter_label.clone(),
         }
     }
@@ -179,12 +179,12 @@ async fn connect_to_database() -> anyhow::Result<Connection> {
 
 async fn write_counter_into_db(conn: Connection, counter: u128) -> anyhow::Result<()> {
     conn.execute(
-        r#"
+        "
         CREATE TABLE IF NOT EXISTS counter (
             id    INTEGER PRIMARY KEY,
             count TEXT NOT NULL
         )
-        "#,
+        ",
         (),
     )
     .await?;
@@ -259,10 +259,16 @@ fn main() -> anyhow::Result<()> {
         .application_id("com.example.BongoCat")
         .build();
 
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let conn = rt.block_on(connect_to_database())?;
+    let initial = rt.block_on(read_counter_from_db(conn.clone()))?.unwrap_or(0);
+
     let db_tx_for_gtk = db_tx.clone();
     app.connect_activate(move |app| {
         // load_custom_css();
-        let bongo = BongoCat::new(app);
+        let bongo = BongoCat::new(app, initial);
         let (key_sender, key_receiver) = unbounded::<()>();
 
         for entry in fs::read_dir("/dev/input").expect("failed to read /dev/input") {
