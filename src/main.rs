@@ -1,0 +1,209 @@
+use std::{
+    cell::Cell,
+    env, fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
+
+use async_channel::{unbounded, Sender};
+use evdev::{Device, EventSummary, KeyCode};
+use glib::source::{idle_add_local, timeout_add_local};
+use glib::{ControlFlow, MainContext};
+use gtk4::{prelude::*, Label, Picture};
+use gtk4::{Application, ApplicationWindow};
+use gtk4_layer_shell::{Edge, Layer, LayerShell};
+
+const ANIM_DURATION_MS: u32 = 150;
+
+struct BongoCat {
+    img: Arc<Mutex<Picture>>,
+    hit_left_path: PathBuf,
+    hit_right_path: PathBuf,
+    anim_ms: u32,
+    next_left: Cell<bool>,
+    counter: Mutex<u128>,
+    counter_label: Label,
+}
+
+impl BongoCat {
+    fn new(app: &Application) -> Self {
+        let asset_dir = asset_dir();
+        let hit_left_path = asset_dir.join("idle.png");
+        let hit_right_path = asset_dir.join("hit.png");
+
+        let hit_left = Picture::for_filename(&hit_left_path);
+        let hit_right = Picture::for_filename(&hit_right_path);
+
+        let (width, height) = (hit_left.width(), hit_right.height());
+
+        let win = ApplicationWindow::builder()
+            .application(app)
+            .decorated(false)
+            .default_width(width)
+            .default_height(height)
+            .build();
+
+        win.init_layer_shell();
+        win.set_layer(Layer::Overlay);
+        // TODO: add customizable margins or something
+        win.set_anchor(Edge::Top, true);
+        win.set_anchor(Edge::Right, true);
+        win.set_decorated(false);
+
+        let counter_label = Label::default();
+        counter_label.set_text("0");
+
+        let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        container.append(&counter_label);
+        container.append(&hit_left);
+        win.set_child(Some(&container));
+        win.show();
+
+        Self {
+            img: Arc::new(Mutex::new(hit_left)),
+            hit_left_path,
+            hit_right_path,
+            anim_ms: ANIM_DURATION_MS,
+            next_left: Cell::new(true),
+            counter: Mutex::new(0),
+            counter_label: counter_label.clone(),
+        }
+    }
+
+    fn increment_counter(&self) {
+        let new_count = {
+            let mut guard = self.counter.lock().unwrap();
+            *guard += 1;
+            *guard
+        };
+        let label = self.counter_label.clone();
+        idle_add_local(move || {
+            label.set_text(&new_count.to_string());
+            ControlFlow::Break
+        });
+    }
+
+    fn animate(&self) {
+        let do_left = self.next_left.get();
+        self.next_left.set(!do_left);
+
+        let first_path = if do_left {
+            self.hit_left_path.clone()
+        } else {
+            self.hit_right_path.clone()
+        };
+        let second_path = if do_left {
+            self.hit_right_path.clone()
+        } else {
+            self.hit_left_path.clone()
+        };
+
+        let img_arc = self.img.clone();
+        let delay = Duration::from_millis(self.anim_ms as u64);
+
+        idle_add_local(move || {
+            if let Ok(img_w) = img_arc.lock() {
+                img_w.set_filename(Some(first_path.as_path()));
+            }
+
+            let img_for_timeout = img_arc.clone();
+            let second_for_timer = second_path.clone();
+
+            timeout_add_local(delay, move || {
+                if let Ok(img_w) = img_for_timeout.lock() {
+                    img_w.set_filename(Some(second_for_timer.as_path()));
+                }
+                ControlFlow::Break
+            });
+
+            ControlFlow::Break
+        });
+    }
+}
+
+fn asset_dir() -> PathBuf {
+    if let Some(val) = env::var_os("BONGO_ASSETS") {
+        return PathBuf::from(val);
+    }
+
+    dirs::config_dir()
+        .expect("could not find a config directory")
+        .join("bongo-cat")
+}
+
+fn start_key_listener(path: &str, sender: Sender<()>) -> thread::JoinHandle<()> {
+    let dev_path = path.to_string();
+    thread::spawn(move || {
+        let mut dev = Device::open(&dev_path)
+            .expect("Add your user to the ‘input’ group so you can read /dev/input/event*");
+        loop {
+            if let Ok(events) = dev.fetch_events() {
+                for ev in events {
+                    if let EventSummary::Key(_, _key, value) = ev.destructure() {
+                        if value == 1 {
+                            let _ = sender.try_send(());
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+// fn load_custom_css() {
+//     let css = r#"
+//         window.background {
+//             background-color: transparent;
+//         }
+//     "#;
+//     let provider = CssProvider::new();
+//     provider.load_from_data(css);
+//     style_context_add_provider_for_display(
+//         &Display::default().expect("Could not connect to a display."),
+//         &provider,
+//         STYLE_PROVIDER_PRIORITY_APPLICATION,
+//     );
+// }
+
+fn main() {
+    // std::env::set_var("GTK_THEME", "Adwaita");
+    let app = Application::builder()
+        .application_id("com.example.BongoCat")
+        .build();
+
+    app.connect_activate(move |app| {
+        // load_custom_css();
+        let bongo = BongoCat::new(app);
+        let (sender, receiver) = unbounded::<()>();
+
+        for entry in fs::read_dir("/dev/input").expect("failed to read /dev/input") {
+            let path = match entry {
+                Ok(e) => e.path(),
+                Err(_) => continue,
+            };
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with("event") {
+                    if let Ok(dev) = Device::open(&path) {
+                        if dev
+                            .supported_keys()
+                            .map_or(false, |keys| keys.contains(KeyCode::KEY_A))
+                        {
+                            start_key_listener(&path.to_string_lossy(), sender.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        MainContext::default().spawn_local(async move {
+            while let Ok(()) = receiver.recv().await {
+                bongo.animate();
+                bongo.increment_counter();
+            }
+        });
+    });
+
+    app.run();
+}
