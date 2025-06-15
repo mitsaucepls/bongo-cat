@@ -14,6 +14,7 @@ use glib::{ControlFlow, MainContext};
 use gtk4::{prelude::*, Label, Picture};
 use gtk4::{Application, ApplicationWindow};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
+use limbo::{Connection, Value};
 
 const ANIM_DURATION_MS: u32 = 150;
 
@@ -167,11 +168,68 @@ fn start_key_listener(path: &str, sender: Sender<()>) -> thread::JoinHandle<()> 
 //     );
 // }
 
+async fn connect_to_database() -> anyhow::Result<Connection> {
+    let config_dir = asset_dir();
+    let db_file    = config_dir.join("sqlite.db");
+    let db_path    = db_file.to_str().unwrap();
+    let db = limbo::Builder::new_local(db_path).build().await?;
+
+    Ok(db.connect()?)
+}
+
+async fn write_counter_into_db(conn: Connection, counter: u128) -> anyhow::Result<()> {
+    conn.execute(
+        r#"
+        CREATE TABLE IF NOT EXISTS counter (
+            id    INTEGER PRIMARY KEY,
+            count TEXT NOT NULL
+        )
+        "#,
+        (),
+    )
+    .await?;
+
+    let counter_str = counter.to_string();
+
+    conn.execute(
+        "INSERT INTO counter (id, count) VALUES (1, ?) \
+         ON CONFLICT(id) DO UPDATE SET count = excluded.count",
+        [ counter_str.as_str() ],
+    ).await?;
+
+    Ok(())
+}
+
+async fn read_counter_from_db(conn: Connection) -> anyhow::Result<Option<u128>> {
+    let mut rows = conn.query(
+            "SELECT count FROM counter WHERE id = 1",
+            (),
+        ).await?;
+
+    if let Some(row) = rows.next().await? {
+
+        let v = row.get_value(0)?;
+
+        if let Value::Text(s) = v {
+            let n = s
+                .parse::<u128>()?;
+            Ok(Some(n))
+        } else {
+            anyhow::bail!("expected TEXT for counter, got {:?}", v);
+        }
+    } else {
+        Ok(None)
+    }
+
+}
+
 fn main() {
     // std::env::set_var("GTK_THEME", "Adwaita");
     let app = Application::builder()
         .application_id("com.example.BongoCat")
         .build();
+
+    // connect_to_database();
 
     app.connect_activate(move |app| {
         // load_custom_css();
