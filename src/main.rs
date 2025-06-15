@@ -2,7 +2,7 @@ use std::{
     cell::Cell,
     env, fs,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -191,11 +191,24 @@ async fn write_counter_into_db(conn: Connection, counter: u128) -> anyhow::Resul
 
     let counter_str = counter.to_string();
 
-    conn.execute(
-        "INSERT INTO counter (id, count) VALUES (1, ?) \
-         ON CONFLICT(id) DO UPDATE SET count = excluded.count",
-        [ counter_str.as_str() ],
-    ).await?;
+    println!("{}", counter_str);
+
+    // First try to update the existing row
+    let rows_updated = conn.execute(
+        "UPDATE counter SET count = ?1 WHERE id = 1",
+        [counter_str.as_str()],
+    )
+    .await?;
+
+    println!("{}", rows_updated);
+
+    if rows_updated == 0 {
+        conn.execute(
+            "INSERT INTO counter (id, count) VALUES (1, ?1)",
+            [counter_str.as_str()],
+        )
+        .await?;
+    }
 
     Ok(())
 }
@@ -223,18 +236,34 @@ async fn read_counter_from_db(conn: Connection) -> anyhow::Result<Option<u128>> 
 
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
+    let (db_tx, db_rx) = mpsc::channel::<u128>();
+    thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build Tokio runtime");
+        rt.block_on(async move {
+            let conn = connect_to_database().await.expect("failed to connect to database");
+            while let Ok(count) = db_rx.recv() {
+                if let Err(err) = write_counter_into_db(conn.clone(), count).await {
+                    eprintln!("DB write error: {:?}", err);
+                }
+            }
+        });
+    });
+
+
     // std::env::set_var("GTK_THEME", "Adwaita");
     let app = Application::builder()
         .application_id("com.example.BongoCat")
         .build();
 
-    // connect_to_database();
-
+    let db_tx_for_gtk = db_tx.clone();
     app.connect_activate(move |app| {
         // load_custom_css();
         let bongo = BongoCat::new(app);
-        let (sender, receiver) = unbounded::<()>();
+        let (key_sender, key_receiver) = unbounded::<()>();
 
         for entry in fs::read_dir("/dev/input").expect("failed to read /dev/input") {
             let path = match entry {
@@ -248,20 +277,26 @@ fn main() {
                             .supported_keys()
                             .map_or(false, |keys| keys.contains(KeyCode::KEY_A))
                         {
-                            start_key_listener(&path.to_string_lossy(), sender.clone());
+                            start_key_listener(&path.to_string_lossy(), key_sender.clone());
                         }
                     }
                 }
             }
         }
 
+        let db_tx_for_async = db_tx_for_gtk.clone();
         MainContext::default().spawn_local(async move {
-            while let Ok(()) = receiver.recv().await {
+            while key_receiver.recv().await.is_ok() {
                 bongo.animate();
                 bongo.increment_counter();
+                let current = *bongo.counter.lock().unwrap();
+                if let Err(_) = db_tx_for_async.send(current) {
+                    eprintln!("DB thread has shut down");
+                }
             }
         });
     });
 
     app.run();
+    Ok(())
 }
