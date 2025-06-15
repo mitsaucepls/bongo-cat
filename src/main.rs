@@ -4,14 +4,18 @@ use std::{
     path::PathBuf,
     sync::{mpsc, Arc, Mutex},
     thread,
-    time::Duration, u128,
+    time::Duration,
+    u128,
 };
 
 use async_channel::{unbounded, Sender};
 use evdev::{Device, EventSummary, KeyCode};
 use glib::source::{idle_add_local, timeout_add_local};
 use glib::{ControlFlow, MainContext};
-use gtk4::{gdk::Display, prelude::*, style_context_add_provider_for_display, CssProvider, Label, Picture, STYLE_PROVIDER_PRIORITY_APPLICATION};
+use gtk4::{
+    gdk::Display, prelude::*, style_context_add_provider_for_display, CssProvider, Label, Picture,
+    STYLE_PROVIDER_PRIORITY_APPLICATION,
+};
 use gtk4::{Application, ApplicationWindow};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use limbo::{Connection, Value};
@@ -36,8 +40,6 @@ impl BongoCat {
         let hit_right_path = asset_dir.join("hit_right.png");
         let idle_path = asset_dir.join("idle.png");
 
-        // let hit_left = Picture::for_filename(&hit_left_path);
-        // let hit_right = Picture::for_filename(&hit_right_path);
         let idle = Picture::for_filename(&idle_path);
 
         let (width, height) = (idle.width(), idle.height());
@@ -51,7 +53,6 @@ impl BongoCat {
 
         win.init_layer_shell();
         win.set_layer(Layer::Overlay);
-        // TODO: add customizable margins or something
         win.set_anchor(Edge::Bottom, true);
         win.set_anchor(Edge::Right, true);
         win.set_decorated(false);
@@ -91,25 +92,22 @@ impl BongoCat {
     }
 
     fn animate(&self) {
-        // decide which way to hit, then flip
         let do_left = self.next_left.get();
         self.next_left.set(!do_left);
 
-        // this is the one and only hit you want
-        let hit_path  = if do_left {
+        let hit_path = if do_left {
             &self.hit_left_path
         } else {
             &self.hit_right_path
         };
         let idle_path = &self.idle_path;
 
-        let delay   = Duration::from_millis(self.anim_ms as u64);
+        let delay = Duration::from_millis(self.anim_ms as u64);
         let img_arc = self.img.clone();
 
-        // only two entries: hit @ t=0, idle @ t=delay
         let schedule = [
-            (0 * delay,   hit_path.clone()),
-            (1 * delay,   idle_path.clone()),
+            (0 * delay, hit_path.clone()),
+            (1 * delay, idle_path.clone()),
         ];
 
         for (offset, path) in schedule {
@@ -154,13 +152,13 @@ fn start_key_listener(path: &str, sender: Sender<()>) -> thread::JoinHandle<()> 
 }
 
 fn load_custom_css() {
-    let css = r#"
+    let css = "
         window.background {
             background-color: transparent;
             margin-bottom: 93px;
             margin-right: 7px;
         }
-    "#;
+    ";
     let provider = CssProvider::new();
     provider.load_from_data(css);
     style_context_add_provider_for_display(
@@ -172,8 +170,8 @@ fn load_custom_css() {
 
 async fn connect_to_database() -> anyhow::Result<Connection> {
     let config_dir = asset_dir();
-    let db_file    = config_dir.join("sqlite.db");
-    let db_path    = db_file.to_str().unwrap();
+    let db_file = config_dir.join("sqlite.db");
+    let db_path = db_file.to_str().unwrap();
     let db = limbo::Builder::new_local(db_path).build().await?;
 
     Ok(db.connect()?)
@@ -194,11 +192,12 @@ async fn write_counter_into_db(conn: Connection, counter: u128) -> anyhow::Resul
     let counter_str = counter.to_string();
 
     // First try to update the existing row
-    let rows_updated = conn.execute(
-        "UPDATE counter SET count = ?1 WHERE id = 1",
-        [counter_str.as_str()],
-    )
-    .await?;
+    let rows_updated = conn
+        .execute(
+            "UPDATE counter SET count = ?1 WHERE id = 1",
+            [counter_str.as_str()],
+        )
+        .await?;
 
     if rows_updated == 0 {
         conn.execute(
@@ -212,18 +211,15 @@ async fn write_counter_into_db(conn: Connection, counter: u128) -> anyhow::Resul
 }
 
 async fn read_counter_from_db(conn: Connection) -> anyhow::Result<Option<u128>> {
-    let mut rows = conn.query(
-            "SELECT count FROM counter WHERE id = 1",
-            (),
-        ).await?;
+    let mut rows = conn
+        .query("SELECT count FROM counter WHERE id = 1", ())
+        .await?;
 
     if let Some(row) = rows.next().await? {
-
         let v = row.get_value(0)?;
 
         if let Value::Text(s) = v {
-            let n = s
-                .parse::<u128>()?;
+            let n = s.parse::<u128>()?;
             Ok(Some(n))
         } else {
             anyhow::bail!("expected TEXT for counter, got {:?}", v);
@@ -231,7 +227,6 @@ async fn read_counter_from_db(conn: Connection) -> anyhow::Result<Option<u128>> 
     } else {
         Ok(None)
     }
-
 }
 
 fn main() -> anyhow::Result<()> {
@@ -242,7 +237,9 @@ fn main() -> anyhow::Result<()> {
             .build()
             .expect("failed to build Tokio runtime");
         rt.block_on(async move {
-            let conn = connect_to_database().await.expect("failed to connect to database");
+            let conn = connect_to_database()
+                .await
+                .expect("failed to connect to database");
             while let Ok(count) = db_rx.recv() {
                 if let Err(err) = write_counter_into_db(conn.clone(), count).await {
                     eprintln!("DB write error: {:?}", err);
@@ -250,7 +247,6 @@ fn main() -> anyhow::Result<()> {
             }
         });
     });
-
 
     // std::env::set_var("GTK_THEME", "Adwaita");
     let app = Application::builder()
@@ -261,7 +257,9 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
     let conn = rt.block_on(connect_to_database())?;
-    let initial = rt.block_on(read_counter_from_db(conn.clone()))?.unwrap_or(0);
+    let initial = rt
+        .block_on(read_counter_from_db(conn.clone()))?
+        .unwrap_or(0);
 
     let db_tx_for_gtk = db_tx.clone();
     app.connect_activate(move |app| {
