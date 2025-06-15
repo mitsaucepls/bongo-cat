@@ -22,6 +22,7 @@ struct BongoCat {
     img: Arc<Mutex<Picture>>,
     hit_left_path: PathBuf,
     hit_right_path: PathBuf,
+    idle_path: PathBuf,
     anim_ms: u32,
     next_left: Cell<bool>,
     counter: Mutex<u128>,
@@ -31,13 +32,15 @@ struct BongoCat {
 impl BongoCat {
     fn new(app: &Application, initial: u128) -> Self {
         let asset_dir = asset_dir();
-        let hit_left_path = asset_dir.join("idle.png");
-        let hit_right_path = asset_dir.join("hit.png");
+        let hit_left_path = asset_dir.join("hit_left.png");
+        let hit_right_path = asset_dir.join("hit_right.png");
+        let idle_path = asset_dir.join("idle.png");
 
-        let hit_left = Picture::for_filename(&hit_left_path);
-        let hit_right = Picture::for_filename(&hit_right_path);
+        // let hit_left = Picture::for_filename(&hit_left_path);
+        // let hit_right = Picture::for_filename(&hit_right_path);
+        let idle = Picture::for_filename(&idle_path);
 
-        let (width, height) = (hit_left.width(), hit_right.height());
+        let (width, height) = (idle.width(), idle.height());
 
         let win = ApplicationWindow::builder()
             .application(app)
@@ -49,7 +52,7 @@ impl BongoCat {
         win.init_layer_shell();
         win.set_layer(Layer::Overlay);
         // TODO: add customizable margins or something
-        win.set_anchor(Edge::Top, true);
+        win.set_anchor(Edge::Bottom, true);
         win.set_anchor(Edge::Right, true);
         win.set_decorated(false);
 
@@ -58,14 +61,15 @@ impl BongoCat {
 
         let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         container.append(&counter_label);
-        container.append(&hit_left);
+        container.append(&idle);
         win.set_child(Some(&container));
         win.show();
 
         Self {
-            img: Arc::new(Mutex::new(hit_left)),
+            img: Arc::new(Mutex::new(idle)),
             hit_left_path,
             hit_right_path,
+            idle_path,
             anim_ms: ANIM_DURATION_MS,
             next_left: Cell::new(true),
             counter: Mutex::new(initial),
@@ -87,40 +91,36 @@ impl BongoCat {
     }
 
     fn animate(&self) {
+        // decide which way to hit, then flip
         let do_left = self.next_left.get();
         self.next_left.set(!do_left);
 
-        let first_path = if do_left {
-            self.hit_left_path.clone()
+        // this is the one and only hit you want
+        let hit_path  = if do_left {
+            &self.hit_left_path
         } else {
-            self.hit_right_path.clone()
+            &self.hit_right_path
         };
-        let second_path = if do_left {
-            self.hit_right_path.clone()
-        } else {
-            self.hit_left_path.clone()
-        };
+        let idle_path = &self.idle_path;
 
+        let delay   = Duration::from_millis(self.anim_ms as u64);
         let img_arc = self.img.clone();
-        let delay = Duration::from_millis(self.anim_ms as u64);
 
-        idle_add_local(move || {
-            if let Ok(img_w) = img_arc.lock() {
-                img_w.set_filename(Some(first_path.as_path()));
-            }
+        // only two entries: hit @ t=0, idle @ t=delay
+        let schedule = [
+            (0 * delay,   hit_path.clone()),
+            (1 * delay,   idle_path.clone()),
+        ];
 
-            let img_for_timeout = img_arc.clone();
-            let second_for_timer = second_path.clone();
-
-            timeout_add_local(delay, move || {
-                if let Ok(img_w) = img_for_timeout.lock() {
-                    img_w.set_filename(Some(second_for_timer.as_path()));
+        for (offset, path) in schedule {
+            let img = img_arc.clone();
+            timeout_add_local(offset, move || {
+                if let Ok(img_w) = img.lock() {
+                    img_w.set_filename(Some(path.as_path()));
                 }
                 ControlFlow::Break
             });
-
-            ControlFlow::Break
-        });
+        }
     }
 }
 
@@ -157,7 +157,8 @@ fn load_custom_css() {
     let css = r#"
         window.background {
             background-color: transparent;
-            margin-top: 100px;
+            margin-bottom: 93px;
+            margin-right: 7px;
         }
     "#;
     let provider = CssProvider::new();
