@@ -31,3 +31,10 @@ Bongo Cat 4 Linux listens for key-press events and shows an animated cat bonging
   - dont forget the input user group (sudo usermod -aG input "$USER")
 - **tokio** & **async-channel**  
 - **limbo** (database)
+
+## Build
+
+```bash
+cargo build --release
+./target/release/bongo-cat
+```
