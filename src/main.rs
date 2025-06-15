@@ -191,7 +191,6 @@ async fn write_counter_into_db(conn: Connection, counter: u128) -> anyhow::Resul
 
     let counter_str = counter.to_string();
 
-    // First try to update the existing row
     let rows_updated = conn
         .execute(
             "UPDATE counter SET count = ?1 WHERE id = 1",
