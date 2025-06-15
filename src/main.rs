@@ -11,7 +11,7 @@ use async_channel::{unbounded, Sender};
 use evdev::{Device, EventSummary, KeyCode};
 use glib::source::{idle_add_local, timeout_add_local};
 use glib::{ControlFlow, MainContext};
-use gtk4::{prelude::*, Label, Picture};
+use gtk4::{gdk::Display, prelude::*, style_context_add_provider_for_display, CssProvider, Label, Picture, STYLE_PROVIDER_PRIORITY_APPLICATION};
 use gtk4::{Application, ApplicationWindow};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use limbo::{Connection, Value};
@@ -153,20 +153,21 @@ fn start_key_listener(path: &str, sender: Sender<()>) -> thread::JoinHandle<()> 
     })
 }
 
-// fn load_custom_css() {
-//     let css = r#"
-//         window.background {
-//             background-color: transparent;
-//         }
-//     "#;
-//     let provider = CssProvider::new();
-//     provider.load_from_data(css);
-//     style_context_add_provider_for_display(
-//         &Display::default().expect("Could not connect to a display."),
-//         &provider,
-//         STYLE_PROVIDER_PRIORITY_APPLICATION,
-//     );
-// }
+fn load_custom_css() {
+    let css = r#"
+        window.background {
+            background-color: transparent;
+            margin-top: 100px;
+        }
+    "#;
+    let provider = CssProvider::new();
+    provider.load_from_data(css);
+    style_context_add_provider_for_display(
+        &Display::default().expect("Could not connect to a display."),
+        &provider,
+        STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
 
 async fn connect_to_database() -> anyhow::Result<Connection> {
     let config_dir = asset_dir();
@@ -191,16 +192,12 @@ async fn write_counter_into_db(conn: Connection, counter: u128) -> anyhow::Resul
 
     let counter_str = counter.to_string();
 
-    println!("{}", counter_str);
-
     // First try to update the existing row
     let rows_updated = conn.execute(
         "UPDATE counter SET count = ?1 WHERE id = 1",
         [counter_str.as_str()],
     )
     .await?;
-
-    println!("{}", rows_updated);
 
     if rows_updated == 0 {
         conn.execute(
@@ -267,7 +264,7 @@ fn main() -> anyhow::Result<()> {
 
     let db_tx_for_gtk = db_tx.clone();
     app.connect_activate(move |app| {
-        // load_custom_css();
+        load_custom_css();
         let bongo = BongoCat::new(app, initial);
         let (key_sender, key_receiver) = unbounded::<()>();
 
