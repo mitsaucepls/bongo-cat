@@ -87,6 +87,7 @@ fn setup_layer_shell(window: &ApplicationWindow) {
     window.set_anchor(Edge::Bottom, true);
     window.set_anchor(Edge::Right, true);
     window.set_decorated(false);
+    window.set_namespace(Some("bongo"));
 }
 
 pub fn load_custom_css() -> anyhow::Result<()> {
