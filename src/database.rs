@@ -1,10 +1,10 @@
 use crate::config;
 use anyhow::Result;
-use limbo::{Connection, Value};
+use turso::{Connection, Value};
 
 pub async fn connect() -> Result<Connection> {
     let db_path = config::db_path();
-    let db = limbo::Builder::new_local(db_path.to_str().unwrap())
+    let db = turso::Builder::new_local(db_path.to_str().unwrap())
         .build()
         .await?;
     Ok(db.connect()?)
